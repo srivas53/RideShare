@@ -1,0 +1,158 @@
+qsub -I -l nodes=1:ppn=20,walltime=2:01:00,naccesspolicy=shared -q cai161
+
+module load gcc
+module load r
+R
+
+#-
+
+library(igraph, lib.loc='/home/srivas53/Rlibs')
+library(shp2graph, lib.loc='/home/srivas53/Rlibs')
+library(RANN, lib.loc='/home/srivas53/Rlibs')
+library(dplyr,lib.loc='/home/srivas53/Rlibs')
+library(sp,lib.loc='/home/srivas53/Rlibs')
+library(rgdal,lib.loc='/home/srivas53/Rlibs')
+library(bindrcpp, lib.loc='/home/srivas53/Rlibs') 
+
+setwd('/home/srivas53/Varun Srivastava/')
+DataSet <- read.csv('yellow_2014_noAxisHug.csv', header=TRUE, sep=" ",skipNul=TRUE)
+setwd('/home/srivas53/Varun Srivastava/shapefiles/NYC_Manhattan/') # Just for manhattan to ensure fast running on Rice
+MAPshp <- readOGR(dsn=".", layer="Manhattan")
+setwd('/home/srivas53/Program Output VS') # for later
+
+MAPraw <- readshpnw(MAPshp, ELComputed=FALSE)
+
+costMatrix <- MAPraw[[5]]$FromToCost
+n = which(costMatrix==-1)
+costMatrix[n] <- MAPraw[[5]]$ToFromCost[n]
+MAPgraph <- nel2igraph(MAPraw[[2]], MAPraw[[3]], weight=costMatrix) 
+
+DataXo <- DataSet$pickup_longitude
+DataYo <- DataSet$pickup_latitude
+DataXd <- DataSet$dropoff_longitude
+DataYd <- DataSet$dropoff_latitude
+startMatrix = matrix(c(DataXo,DataYo), nrow=length(DataXo), ncol=2)
+endMatrix = matrix(c(DataXd, DataYd), nrow=length(DataXo), ncol=2)
+
+MAPxCoords <- matrix(nrow=length(MAPraw[[2]][,1]), ncol=1)
+MAPyCoords <- matrix(nrow=length(MAPraw[[2]][,1]), ncol=1)
+CoordRaw <- MAPraw[[2]][,2]
+for (i in 1:(length(MAPxCoords))) {
+	MAPxCoords[i] <- CoordRaw[[i]][1]
+	MAPyCoords[i] <- CoordRaw[[i]][2]
+}
+streetMatrix = matrix(c(MAPxCoords, MAPyCoords), nrow=length(MAPxCoords), ncol=2)
+
+# converting from UTM to lat-long coordinates
+tempSP <- SpatialPoints(streetMatrix, proj4string=CRS("+proj=utm +zone=18 +datum=WGS84"))
+tempGEO <- spTransform(tempSP, CRS("+proj=longlat +datum=WGS84"))
+streetMatrix = matrix(c(tempGEO$coords.x1, tempGEO$coords.x2), nrow=length(tempGEO$coords.x1), ncol=2)
+
+MAPspeeds <- as.numeric(data.matrix(unlist(MAPraw[[5]]$SPEED)))
+MAPlengths <- MAPraw[[5]]$Shape_Leng
+MAPEdge<- MAPraw[[5]]$EdgeID-----------------------
+spdlims <- vector(mode='list', length=1)
+strlens <- vector(mode='list', length=1)
+edgeIDs <- vector(mode='list', length=1)
+edge <- vector(mode='list', length=1)-----------------
+
+tripStartNodeIDs <- nn2(data=streetMatrix, query=startMatrix, k=1, treetype="bd", searchtype="radius", radius=.002, eps=0)
+tripEndNodeIDs <- nn2(data=streetMatrix, query=endMatrix, k=1, treetype="bd", searchtype="radius", radius=.002, eps=0)
+DataSet$startID <- c(tripStartNodeIDs$nn.idx)
+DataSet$endID <- c(tripEndNodeIDs$nn.idx)
+DataSet <- dplyr::filter(DataSet, startID!=0 & endID!=0)
+tripStartNodeIDs <- DataSet$startID
+tripEndNodeIDs <- DataSet$endID
+
+attCatch <- function(tS, tE) {
+	path <- get.shortest.paths(MAPgraph, from=tS, to=tE)
+	if (length(path$vpath[[1]]) > 1) {
+		x1 <- path$vpath[[1]][1:(length(path$vpath[[1]])-1)]
+		x2 <- path$vpath[[1]][2:length(path$vpath[[1]])]
+		edgeIDs <- get.edge.ids(MAPgraph, c(rbind(x1,x2)))
+		spdlims[[1]] <- MAPspeeds[edgeIDs]
+		# harvesting the street lengths
+		strlens[[1]] <- MAPlengths[edgeIDs]
+		# **this would be a good place to include more attributes
+		edge[[1]]<-MAPEdge[edgeIDs]--------------------
+	}
+	c(spdlims, strlens,edge)----------
+}
+
+ts = tripStartNodeIDs[1:10000] #Trying out for first 10,000 trips of the Yellow Taxi Data
+te = tripEndNodeIDs[1:10000]
+tripAttributes<- mapply(tS = te, tE = ts, FUN=attCatch)
+
+#tripAttributes <- mapply(tS = tripStartNodeIDs, tE = tripEndNodeIDs, FUN=attCatch)
+
+#-
+
+setwd('/home/srivas53/Program Output VS')
+
+write.table(DataSet, file="cleanDataSet 16 jul.csv", sep=" ")
+
+sink("programOutput16jul.csv")
+cat("TripNumber", "StreetInTrip", "StreetLength", "SpeedLimit","EdgeID", sep=","); cat('\n')
+for (i in 1:(length(tripAttributes[1,]))) {
+	if (length(tripAttributes[1,i][[1]]) != 0) {
+		j <- 1:length(tripAttributes[1,i][[1]])
+		cat(rbind( i, ',', j, ',', unlist(tripAttributes[1,i]), ',', unlist(tripAttributes[2,i]), ',',unlist(tripAttributes[3,i]), '\n' ), sep="")
+	}
+}
+
+sink()
+
+-------------------Only till here--------------------------------
+
+#-
+
+relErr <- list() # will hold the relative errors
+len <- vector(mode="double", length=length(tripAttributes)/2)
+for (i in 1:(length(tripAttributes)/2)) {
+	len[[i]] = sum(tripAttributes[2,i][[1]])
+}
+real = DataSet$trip_distance[1:(length(tripAttributes)/2)] * 1609.34
+relErr <- abs((len-real)/real)
+relErr <- relErr[relErr!=1]
+m = mean(unlist(relErr))
+s = sd(unlist(relErr))
+me = median(unlist(relErr))
+
+relErrFiltered <- unlist(relErr[relErr < (m+s)])
+
+mFilt <- mean(relErrFiltered)
+sFilt <- sd(relErrFiltered)
+meFilt <- median(relErrFiltered)
+
+loss <- length(relErr) - length(relErrFiltered)
+lossPercent <- loss/length(relErr) * 100
+
+m; mFilt
+
+sink("programOutputFiltered16jul.csv")
+
+cat("TripNumber", "StreetInTrip", "StreetLength", "SpeedLimit","EdgeID", sep=","); cat('\n')
+for (i in 1:(length(tripAttributes[1,]))) {
+	if (length(tripAttributes[1,i][[1]]) != 0 && relErr[i]<(m+s)) {
+		j <- 1:length(tripAttributes[1,i][[1]])
+		cat(rbind( i, ',', j, ',', unlist(tripAttributes[1,i]), ',', unlist(tripAttributes[2,i]),',',unlist(tripAttributes[3,i]), '\n' ), sep="")
+	}
+}
+
+sink()
+
+sink("ErrorReport.txt")
+
+cat("Error report for data stored in programOutput.txt:", '\n')
+cat("Mean relative trip length error, compared to DataSet: ", m*100, "%", '\n', sep="")
+cat("Standard deviation of relative errors: ", s*100, "%", '\n', sep="")
+cat("Median relative error: ", me*100, "%", '\n', sep="")
+cat("---", '\n')
+cat("Error report for data stored in programOutputFiltered.txt:", '\n', sep="")
+cat("Mean relative trip length error, with values above one sd removed: ", mFilt*100, "%", '\n', sep="")
+cat("Standard deviation: ", sFilt*100, "%", '\n', sep="")
+cat("Median: ", mFilt*100, "%", '\n', sep="")
+cat("Number of trips filtered out:", loss, '\n')
+cat("% of trips filtered out: ", lossPercent, "%", '\n', sep="")
+
+sink()
