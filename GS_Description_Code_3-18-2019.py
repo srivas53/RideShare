@@ -30,6 +30,10 @@ def Descriptions(x):
         if math.isnan(x[systems[i]]):
             continue
         description_table2=description_table[description_table.gs_sub_system==systems[i]]
+        sdlkmsdlkdsm
+        kljlmm
+        jksdn
+        njkdn
         for row2 in description_table2.itertuples(): 
             global Description
             if row2.score_lower<=x[systems[i]]<=row2.score_upper:
