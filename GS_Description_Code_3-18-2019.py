@@ -33,7 +33,7 @@ def Descriptions(x):
         sdlkmsdlkdsm
         kljlmm
         jksdn
-        njkdn
+        jfjjkdsssddssd
         for row2 in description_table2.itertuples(): 
             global Description
             if row2.score_lower<=x[systems[i]]<=row2.score_upper:
