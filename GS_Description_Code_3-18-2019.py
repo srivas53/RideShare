@@ -22,7 +22,7 @@ systems.remove('product_code_gc')
 #systems.remove('Product_Code')
 df = {'product_code_gc':[ ],'gs_system':[ ],'description_type':[ ],'description':[ ]}
 Description = pd.DataFrame(df)
-greenscore_table=greenscore_table.reset_index(drop=True)
+
 
 start1=time()
 def Descriptions(x):
